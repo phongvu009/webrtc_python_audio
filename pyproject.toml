@@ -1,0 +1,18 @@
+[project]
+name = "simple-webrtc-one"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "aiohttp>=3.12.13",
+    "aiorpc>=0.1.7",
+    "aiortc>=1.13.0",
+    "colorlog>=6.9.0",
+    "loguru>=0.7.3",
+    "vosk>=0.3.45",
+    "watchfiles>=1.1.0",
+]
+[tool.uv]
+#this tells uv to trust the SSL certification 
+allow-insecure-host = ["192.168.68.70"]
