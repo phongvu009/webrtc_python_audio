@@ -15,6 +15,7 @@ import sys
 # get path
 ROOT = Path(__file__).parent
 
+logger.remove() # Remove all existing handlers before adding new ones
 #default log level
 logger.add(sys.stderr, level="DEBUG")
 #custom format
@@ -49,7 +50,19 @@ async def offer(request):
         logger.trace(f"type is : {offer.type}")
         #create peer connection
         pc = RTCPeerConnection()
-        #TODO: add event handler later
+        
+        #data channel
+        @pc.on("datachannel")
+        def on_datachannel(channel):
+            logger.info(f"Data channel created: {channel.label}")
+
+            @channel.on("message")
+            def on_message(message):
+                logger.info(f"Data channel message: {message}")
+                #send message back to client
+                channel.send(f"Server received: {message}")
+
+
         await pc.setRemoteDescription(offer)
         #generate answer
         answer = await pc.createAnswer()
