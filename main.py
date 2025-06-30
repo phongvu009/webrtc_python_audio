@@ -50,8 +50,10 @@ async def offer(request):
         logger.trace(f"type is : {offer.type}")
         #create peer connection
         pc = RTCPeerConnection()
+        #Add Event handlers 
         
         #data channel
+        #when a data channel is created, this callback will be called
         @pc.on("datachannel")
         def on_datachannel(channel):
             logger.info(f"Data channel created: {channel.label}")
@@ -62,7 +64,14 @@ async def offer(request):
                 #send message back to client
                 channel.send(f"Server received: {message}")
 
-
+        #
+        @pc.on("iceconnectionstatechange")
+        async def on_iceconnectionstatechange():
+            logger.info(f"ICE connection state changed: {pc.iceConnectionState}")
+            if pc.iceConnectionState == "failed": 
+                logger.error("ICE connection failed, closing peer connection")
+                await pc.close()
+        
         await pc.setRemoteDescription(offer)
         #generate answer
         answer = await pc.createAnswer()

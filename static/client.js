@@ -19,10 +19,34 @@ function btn_show_start() {
   start_btn.classList.remove('d-none')
 }
 
-
-//click on stop button - Step 1
+//UI stop Button will call stop function
 function stop() {
   btn_show_start()
+  //close data channel
+  if (dc) {
+    dc.close();
+  }
+
+  //close transceivers
+  if(pc.getTransceivers) {
+    pc.getTransceivers().forEach(( transceiver) =>{
+      if (transceiver.stop){
+        transceiver.stop();
+      }
+    })
+  //close media
+
+  pc.getSenders().forEach((sender) =>{
+    sender.track.stop();
+  })
+
+  //close peer connection
+  setTimeout(() => {
+    if (pc){
+      pc.close();
+    }
+  }, 500)
+}
 }
 
 
@@ -46,6 +70,7 @@ function start() {
     clearInterval(dcInterval)
     console.log('Closed data channel')
     btn_show_start()
+    statusField.innerText = "Data channel closed !"
   }
   //
   dc.onopen = function() {
@@ -59,6 +84,15 @@ function start() {
     console.log("Received message from server: ", messageEvent.data);
   }
 
+  //Connection state change event
+  //may be disconnected, failed, closed by server
+  pc.onconnectionstatechange = () => {
+    if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed') {
+      console.log("Connection state changed: ", pc.iceConnectionState);
+      statusField.innerText = "Disconnected !"
+      stop();
+    }
+  }
 //======================== Hand Shake ====================
   const sendOffer = async(offerDescription) => {
     const response = await fetch('/offer', {
