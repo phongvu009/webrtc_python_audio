@@ -5,14 +5,19 @@ import os
 import asyncio
 from loguru import logger
 import concurrent.futures
+import torch
+from silero_vad import get_speech_timestamps
 
 WHISPER_MODEL_SIZE = "small"
 model = WhisperModel(WHISPER_MODEL_SIZE, device="cpu", compute_type="int8")
 pool = concurrent.futures.ThreadPoolExecutor((os.cpu_count() or 1))
+#vad = load_vad_model(torch.device('cpu'))
 
 def process_chunk_whisper(audio_bytes):
+    # Convert bytes to float32 numpy array (PCM)
     audio_np = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
-    segments, info = model.transcribe(audio_np, language="en", beam_size=1)
+    # Use faster-whisper's built-in VAD filter
+    segments, info = model.transcribe(audio_np, language="en", beam_size=1, vad_filter=True)
     result_text = " ".join([segment.text for segment in segments])
     logger.debug(f"Whisper result: {result_text}")
     return result_text
