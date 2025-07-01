@@ -1,91 +1,82 @@
-from vosk import Model, KaldiRecognizer
+from faster_whisper import WhisperModel
 from av.audio.resampler import AudioResampler
+import numpy as np
 import os
-from pathlib import Path
 import asyncio
 from loguru import logger
-
 import concurrent.futures
 
-vosk_dump_file = None
-
-model = Model(lang='en-us')
-#Manage a pool of threads to process audio data
+WHISPER_MODEL_SIZE = "small"
+model = WhisperModel(WHISPER_MODEL_SIZE, device="cpu", compute_type="int8")
 pool = concurrent.futures.ThreadPoolExecutor((os.cpu_count() or 1))
-dump_fd = None if vosk_dump_file is None else open(vosk_dump_file, "wb")
 
-def process_chunk(recognizer, message):
-    try:
-        res = recognizer.AcceptWaveform(message)
-        logger.debug(f"Recognizer returned: {res}")
-    except Exception :
-        result = None
-    else:
-        if res > 0:
-            result = recognizer.Result()
-        else:
-            result = recognizer.PartialResult()
-            #logger.debug(f"Partial result: {result}")
-    return result
+def process_chunk_whisper(audio_bytes):
+    audio_np = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+    segments, info = model.transcribe(audio_np, language="en", beam_size=1)
+    result_text = " ".join([segment.text for segment in segments])
+    logger.debug(f"Whisper result: {result_text}")
+    return result_text
 
 class KaldiTask:
-    #Wrapper for peer connection
     def __init__(self, peer_connection):
-        self.__resampler = AudioResampler(format='s16', layout='mono', rate=48000)
+        self.__resampler = AudioResampler(format='s16', layout='mono', rate=16000)
         self.__pc = peer_connection
         self.__audio_task = None
+        self.__recv_task = None
         self.__track = None
-        self.__channel = None # data channel
-        self.__recognizer = KaldiRecognizer(model, 48000) # default us-en
+        self.__channel = None
+        self._audio_queue = asyncio.Queue(maxsize=100)
 
     async def set_audio_strack(self, track):
         self.__track = track
-    
-    async def set_text_channel(self,channel):
+
+    async def set_text_channel(self, channel):
         self.__channel = channel
-        
+
     async def start(self):
-        logger.info("Starting KaldiTask")
-        #run in background without blocking the main event loop
+        logger.info("Starting WhisperTask")
+        self.__recv_task = asyncio.create_task(self._receive_audio())
         self.__audio_task = asyncio.create_task(self.__run_audio_xfer())
 
-    async def __run_audio_xfer(self):
-        #get current async loop to run heavy task in a separate thread without blocking async flow
-        loop = asyncio.get_running_loop()
-
-        max_frames = 50
-        frames = []
-        try :
+    async def _receive_audio(self):
+        try:
             while True:
                 frame = await self.__track.recv()
-                logger.debug(f"Received audio frame: {frame}")
+                await self._audio_queue.put(frame)
+                logger.debug(f"Queued audio frame: {frame}")
+        except Exception as e:
+            logger.error(f"Error receiving audio: {e}")
+
+    async def __run_audio_xfer(self):
+        loop = asyncio.get_running_loop()
+        max_frames = 50
+        frames = []
+        try:
+            while True:
+                frame = await self._audio_queue.get()
+                logger.debug(f"Processing audio frame: {frame}")
                 frames.append(frame)
 
                 if len(frames) < max_frames:
                     continue
-                
-                #process frames
+
                 dataframes = bytearray(b'')
                 for fr in frames:
                     for rfr in self.__resampler.resample(fr):
                         plane_bytes = bytes(rfr.planes[0])
                         dataframes += plane_bytes[:rfr.samples * 2]
-                        logger.debug(f"Processed frame: {rfr.samples} samples, {len(plane_bytes)} bytes") 
+                        logger.debug(f"Processed frame: {rfr.samples} samples, {len(plane_bytes)} bytes")
                 frames.clear()
-                
-                if dump_fd is not None:
-                    dump_fd.write(bytes(dataframes))
-                #process in a separate thread to avoid blocking the event loop
-                result = await loop.run_in_executor(pool, process_chunk, self.__recognizer, bytes(dataframes))
-                if result is not None:
-                    logger.info(f"Kaldi recognizer result: {result}")
+
+                result = await loop.run_in_executor(pool, process_chunk_whisper, bytes(dataframes))
+                if result:
+                    logger.info(f"Whisper recognizer result: {result}")
                     if self.__channel is not None and self.__channel.readyState == "open":
                         logger.debug(f"Sending result to data channel: {result}")
                         self.__channel.send(result)
                     else:
                         logger.warning("Data channel not open, cannot send result")
                 else:
-                    logger.error("Kaldi recognizer returned None, check your audio input or model")
+                    logger.error("Whisper recognizer returned None or empty result")
         except Exception as e:
-            logger.error(f"Error in KaldiTask audio processing: {e}")
-                
+            logger.error(f"Error in WhisperTask audio processing: {e}")
