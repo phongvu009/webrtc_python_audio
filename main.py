@@ -4,6 +4,7 @@ from aiohttp import web
 import json
 
 from aiortc import RTCPeerConnection, RTCSessionDescription
+from src.kaldi_task import KaldiTask
 
 from pathlib import Path
 #import logging
@@ -52,12 +53,18 @@ async def offer(request):
         pc = RTCPeerConnection()
         #Add Event handlers 
         
+        #init audio processing instance
+        kaldi = KaldiTask(pc)
+        
         #data channel
         #when a data channel is created, this callback will be called
         @pc.on("datachannel")
-        def on_datachannel(channel):
+        async def on_datachannel(channel):
             logger.info(f"Data channel created: {channel.label}")
-
+            #bind channel to kaldi task
+            await kaldi.set_text_channel(channel)
+            await kaldi.start() # start kaldi task
+            
             @channel.on("message")
             def on_message(message):
                 logger.info(f"Data channel message: {message}")
@@ -72,6 +79,15 @@ async def offer(request):
                 logger.error("ICE connection failed, closing peer connection")
                 await pc.close()
         
+        #handle audio
+        @pc.on('track')
+        async def on_track(track):
+            logger.info(f"Track received: {track.kind}")
+            if track.kind == 'audio':
+                #handle audio track
+                logger.info("Audio track received, setting up KaldiTask")
+                await kaldi.set_audio_strack(track)
+    
         await pc.setRemoteDescription(offer)
         #generate answer
         answer = await pc.createAnswer()
